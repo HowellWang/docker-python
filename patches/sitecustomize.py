@@ -1,10 +1,8 @@
-# Monkey patches BigQuery client creation to use proxy.
-
-# Import torch before anything else. This is a hacky workaround to an error on dlopen
-# reporting a limit on static TLS, tracked in https://github.com/pytorch/pytorch/issues/2575
-import torch
+# TODO(rosbo): Remove this once we fix the issue with fastai importing older libcudnn if imported prior to tensorflow
+import tensorflow
 import os
 
+# Monkey patches BigQuery client creation to use proxy.
 kaggle_proxy_token = os.getenv("KAGGLE_DATA_PROXY_TOKEN")
 if kaggle_proxy_token:
     from google.auth import credentials
