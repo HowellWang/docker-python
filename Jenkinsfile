@@ -1,4 +1,4 @@
-String cron_string = BRANCH_NAME == "master" ? "H 12 * * 1-5" : ""
+String cron_string = BRANCH_NAME == "master" ? "H 12 * * 1,3" : ""
 
 pipeline {
   agent { label 'ephemeral-linux' }
@@ -25,6 +25,18 @@ pipeline {
           set -exo pipefail
 
           ./build | ts
+        '''
+      }
+    }
+
+    stage('Push CPU Untested Image') {
+      steps {
+        slackSend color: 'none', message: "*<${env.BUILD_URL}console|${JOB_NAME} pushing untested image>* ${GIT_COMMIT_SUMMARY}", channel: env.SLACK_CHANNEL
+        sh '''#!/bin/bash
+          set -exo pipefail
+
+          date
+          ./push ci-untested
         '''
       }
     }
@@ -71,6 +83,19 @@ pipeline {
       }
     }
 
+    stage('Push GPU Untested Image') {
+      agent { label 'ephemeral-linux-gpu' }
+      steps {
+        slackSend color: 'none', message: "*<${env.BUILD_URL}console|${JOB_NAME} pushing untested image>* ${GIT_COMMIT_SUMMARY}", channel: env.SLACK_CHANNEL
+        sh '''#!/bin/bash
+          set -exo pipefail
+
+          date
+          ./push --gpu ci-untested
+        '''
+      }
+    }
+
     stage('Test GPU Image') {
       agent { label 'ephemeral-linux-gpu' }
       steps {
@@ -94,6 +119,28 @@ pipeline {
           date
           ./push --gpu staging
         '''
+      }
+    }
+
+    stage('Package Versions') {
+      parallel {
+        stage('CPU Diff') {
+          steps {
+            slackSend color: 'none', message: "*<${env.BUILD_URL}console|${JOB_NAME} diff CPU image>* ${GIT_COMMIT_SUMMARY}", channel: env.SLACK_CHANNEL
+            sh '''#!/bin/bash
+            ./diff
+          '''
+          }
+        }
+        stage('GPU Diff') {
+          agent { label 'ephemeral-linux-gpu' }
+          steps {
+            slackSend color: 'none', message: "*<${env.BUILD_URL}console|${JOB_NAME} diff GPU image>* ${GIT_COMMIT_SUMMARY}", channel: env.SLACK_CHANNEL
+            sh '''#!/bin/bash
+            ./diff --gpu
+          '''
+          }
+        }
       }
     }
   }

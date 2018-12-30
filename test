@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+IMAGE_TAG='kaggle/python-build'
+IMAGE_TAG_OVERRIDE=''
+ADDITONAL_OPTS=''
+PATTERN='test*.py'
+
 usage() {
 cat << EOF
 Usage: $0 [OPTIONS]
@@ -8,12 +13,12 @@ Run tests for a newly-built Python Docker image.
 By default, it runs the tests for the CPU image.
 
 Options:
-    -g, --gpu   Run tests for the GPU image.
+    -g, --gpu             Run tests for the GPU image.
+    -i, --image IMAGE     Run tests against the specified image
+    -p, --pattern PATTERN Pattern to match test files ($PATTERN default)
+
 EOF
 }
-
-IMAGE_TAG="kaggle/python-build"
-ADDITONAL_OPTS=""
 
 while :; do
     case "$1" in 
@@ -22,8 +27,26 @@ while :; do
             exit
             ;;
         -g|--gpu)
-            IMAGE_TAG="kaggle/python-gpu-build"
-            ADDITONAL_OPTS="-v /tmp/empty_dir:/usr/local/cuda/lib64/stubs:ro"
+            IMAGE_TAG='kaggle/python-gpu-build'
+            ADDITONAL_OPTS='-v /tmp/empty_dir:/usr/local/cuda/lib64/stubs:ro'
+            ;;
+        -i|--image)
+            if [[ -z $2 ]]; then
+                usage
+                printf 'ERROR: No IMAGE specified after the %s flag.\n' "$1" >&2
+                exit
+            fi
+            IMAGE_TAG_OVERRIDE=$2
+            shift # skip the flag value
+            ;;
+        -p|--pattern)
+            if [[ -z $2 ]]; then
+                usage
+                printf 'ERROR: No PATTERN specified after the %s flag.\n' "$1" >&2
+                exit
+            fi
+            PATTERN="$2"
+            shift # skip the flag value
             ;;
         -?*)
             usage
@@ -37,8 +60,13 @@ while :; do
     shift
 done
 
+if [[ -n "$IMAGE_TAG_OVERRIDE" ]]; then
+    IMAGE_TAG="$IMAGE_TAG_OVERRIDE"
+fi
+
 readonly IMAGE_TAG
 readonly ADDITONAL_OPTS
+readonly PATTERN
 
 set -x
 rm -rf /tmp/python-build
@@ -59,4 +87,4 @@ docker run --rm -t --read-only --net=none \
     -w=/working \
     $ADDITONAL_OPTS \
     "$IMAGE_TAG" \
-    /bin/bash -c 'python -m unittest discover -s /input/tests'
+    /bin/bash -c "python -m unittest discover -s /input/tests -p $PATTERN"

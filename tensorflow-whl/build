@@ -4,27 +4,21 @@ set -e
 usage() {
 cat << EOF
 Usage: $0 [OPTIONS]
-Build a new Python Docker image.
+Build new Tensorflow wheels for use in the Kaggle Docker Python base images.
 
 Options:
-    -g, --gpu       Build an image with GPU support.
     -c, --use-cache Use layer cache when building a new image.
 EOF
 }
 
 CACHE_FLAG='--no-cache'
-DOCKERFILE='Dockerfile'
-IMAGE_TAG='kaggle/python-build'
+IMAGE_TAG='kaggle/python-tensorflow-whl'
 
 while :; do
     case "$1" in 
         -h|--help)
             usage
             exit
-            ;;
-        -g|--gpu)
-            IMAGE_TAG='kaggle/python-gpu-build'
-            DOCKERFILE='gpu.Dockerfile'
             ;;
         -c|--use-cache)
             CACHE_FLAG=''
@@ -42,8 +36,7 @@ while :; do
 done
 
 readonly CACHE_FLAG
-readonly DOCKERFILE
 readonly IMAGE_TAG
 
 set -x
-docker build --rm --pull $CACHE_FLAG -t "$IMAGE_TAG" -f "$DOCKERFILE" .
+docker build --rm --pull $CACHE_FLAG -t "$IMAGE_TAG" .

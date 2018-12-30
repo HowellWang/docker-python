@@ -1,12 +1,14 @@
-FROM gcr.io/kaggle-images/python-tensorflow-whl:1.11.0-py36 as tensorflow_whl
+FROM gcr.io/kaggle-images/python-tensorflow-whl:1.12.0-py36 as tensorflow_whl
 FROM continuumio/anaconda3:5.2.0
+
+ADD clean-layer.sh  /tmp/clean-layer.sh
+ADD patches/ /tmp/patches/
+ADD patches/nbconvert-extensions.tpl /opt/kaggle/nbconvert-extensions.tpl
 
 # This is necessary for apt to access HTTPS sources
 RUN apt-get update && \
-    apt-get install apt-transport-https
-
-ADD patches/ /tmp/patches/
-ADD patches/nbconvert-extensions.tpl /opt/kaggle/nbconvert-extensions.tpl
+    apt-get install apt-transport-https && \
+    /tmp/clean-layer.sh
 
     # Use a fixed apt-get repo to stop intermittent failures due to flaky httpredir connections,
     # as described by Lionel Chan at http://stackoverflow.com/a/37426929/5881346
@@ -15,7 +17,8 @@ RUN sed -i "s/httpredir.debian.org/debian.uchicago.edu/" /etc/apt/sources.list &
     # https://stackoverflow.com/a/46498173
     conda update -y conda && conda update -y python && \
     pip install --upgrade pip && \
-    apt-get -y install cmake
+    apt-get -y install cmake && \
+    /tmp/clean-layer.sh
 
 # Tensorflow doesn't support python 3.7 yet. See https://github.com/tensorflow/tensorflow/issues/20517
 # Fix to install tf 1.10:: Downgrade python 3.7->3.6.6 and downgrade Pandas 0.23.3->0.23.2
@@ -23,7 +26,8 @@ RUN conda install -y python=3.6.6 && \
     pip install pandas==0.23.2 && \
     # Another fix for TF 1.10 https://github.com/tensorflow/tensorflow/issues/21518
     pip install keras_applications==1.0.4 --no-deps && \
-    pip install keras_preprocessing==1.0.2 --no-deps
+    pip install keras_preprocessing==1.0.2 --no-deps && \
+    /tmp/clean-layer.sh
 
 # The anaconda base image includes outdated versions of these packages. Update them to include the latest version.
 RUN pip install --upgrade seaborn python-dateutil dask && \
@@ -40,16 +44,16 @@ RUN pip install --upgrade seaborn python-dateutil dask && \
     libpaper-utils libpaper1 libpixman-1-0 libpng16-16 librsvg2-2 librsvg2-common libthai-data libthai0 libtiff5 libwmf0.2-7 \
     libxcb-render0 libxcb-shm0 netpbm poppler-data p7zip-full && \
     cd /usr/local/src && \
-    wget https://imagemagick.org/download/ImageMagick.tar.gz && \
+    wget --no-verbose https://imagemagick.org/download/ImageMagick.tar.gz && \
     tar xzf ImageMagick.tar.gz && cd `ls -d ImageMagick-*` && pwd && ls -al && ./configure && \
     make -j $(nproc) && make install && \
-    # clean up ImageMagick source files
-    cd ../ && rm -rf ImageMagick*
+    /tmp/clean-layer.sh
 
 # Install tensorflow from a pre-built wheel
 COPY --from=tensorflow_whl /tmp/tensorflow_cpu/*.whl /tmp/tensorflow_cpu/
 RUN pip install /tmp/tensorflow_cpu/tensorflow*.whl && \
-    rm -rf /tmp/tensorflow_cpu
+    rm -rf /tmp/tensorflow_cpu && \
+    /tmp/clean-layer.sh
 
 RUN apt-get install -y libfreetype6-dev && \
     apt-get install -y libglib2.0-0 libxext6 libsm6 libxrender1 libfontconfig1 --fix-missing && \
@@ -73,7 +77,7 @@ RUN apt-get install -y libfreetype6-dev && \
     #neon
     cd /usr/local/src && \
     git clone --depth 1 https://github.com/NervanaSystems/neon.git && \
-    cd neon && pip install -e . && \
+    cd neon && pip install . && \
     #nolearn
     cd /usr/local/src && mkdir nolearn && cd nolearn && \
     git clone --depth 1 https://github.com/dnouri/nolearn.git && cd nolearn && \
@@ -112,10 +116,7 @@ RUN apt-get install -y libfreetype6-dev && \
     vader_lexicon verbnet webtext word2vec_sample wordnet wordnet_ic words ycoe && \
     # Stop-words
     pip install stop-words && \
-    # clean up
-    rm -rf /root/.cache/pip/* && \
-    apt-get autoremove -y && apt-get clean && \
-    rm -rf /usr/local/src/*
+    /tmp/clean-layer.sh
 
 # Make sure the dynamic linker finds the right libstdc++
 ENV LD_LIBRARY_PATH=/opt/conda/lib
@@ -128,10 +129,9 @@ RUN apt-get -y install zlib1g-dev liblcms2-dev libwebp-dev libgeos-dev && \
     cd basemap && \
     git checkout v1.1.0 && \
     python setup.py install && \
-    pip install basemap --no-binary basemap
-
-# sasl is apparently an ibis dependency
-RUN apt-get -y install libsasl2-dev && \
+    pip install basemap --no-binary basemap && \
+    # sasl is apparently an ibis dependency
+    apt-get -y install libsasl2-dev && \
     # ...as is psycopg2
     apt-get install -y libpq-dev && \
     pip install ibis-framework && \
@@ -148,8 +148,8 @@ RUN apt-get -y install libsasl2-dev && \
     # requires java
     apt-get install -y default-jdk && \
     cd /usr/local/src && mkdir h2o && cd h2o && \
-    wget http://h2o-release.s3.amazonaws.com/h2o/latest_stable -O latest && \
-    wget --no-check-certificate -i latest -O h2o.zip && rm latest && \
+    wget --no-verbose http://h2o-release.s3.amazonaws.com/h2o/latest_stable -O latest && \
+    wget --no-verbose --no-check-certificate -i latest -O h2o.zip && rm latest && \
     unzip h2o.zip && rm h2o.zip && cp h2o-*/h2o.jar . && \
     pip install `find . -name "*whl"` && \
     # Keras setup
@@ -162,7 +162,8 @@ RUN apt-get -y install libsasl2-dev && \
     # Re-run it to flush any more disk writes
     python -c "from keras.models import Sequential; from keras import backend; print(backend._BACKEND)" && \
     # Keras reverts to /tmp from ~ when it detects a read-only file system
-    mkdir -p /tmp/.keras && cp /root/.keras/keras.json /tmp/.keras
+    mkdir -p /tmp/.keras && cp /root/.keras/keras.json /tmp/.keras && \
+    /tmp/clean-layer.sh
 
     # scikit-learn dependencies
 RUN pip install scipy && \
@@ -204,11 +205,7 @@ RUN pip install scipy && \
     apt-get install -y sox libsox-dev libsox-fmt-all && \
     pip install cffi && \
     cd /usr/local/src && git clone https://github.com/pytorch/audio && cd audio && python setup.py install && \
-    # ~~~~ CLEAN UP ~~~~
-    rm -rf /root/.cache/pip/* && \
-    apt-get autoremove -y && apt-get clean && \
-    conda clean -i -l -t -y && \
-    rm -rf /usr/local/src/*
+    /tmp/clean-layer.sh
 
 # vtk with dependencies
 RUN apt-get install -y libgl1-mesa-glx && \
@@ -216,9 +213,7 @@ RUN apt-get install -y libgl1-mesa-glx && \
     # xvfbwrapper with dependencies
     apt-get install -y xvfb && \
     pip install xvfbwrapper && \
-    # ~~~~ CLEAN UP ~~~~
-    rm -rf /root/.cache/pip/* && \
-    apt-get autoremove -y && apt-get clean
+    /tmp/clean-layer.sh
 
 RUN pip install --upgrade mpld3 && \
     pip install mplleaflet && \
@@ -268,7 +263,8 @@ RUN pip install --upgrade mpld3 && \
     pip install pystan && \
     pip install ImageHash && \
     conda install -y ecos && \
-    conda install -y CVXcanon
+    conda install -y CVXcanon && \
+    /tmp/clean-layer.sh
 
 RUN pip install fancyimpute && \
     pip install git+https://github.com/pymc-devs/pymc3 && \
@@ -293,7 +289,10 @@ RUN pip install fancyimpute && \
     pip install pyexcel-ods && \
     pip install sklearn-pandas && \
     pip install stemming && \
-    pip install fbprophet && \
+    # Latest version of fbprophet fails with incompatibility with PyStan. From the logs:
+    # pystan:Something went wrong while unpickling the StanModel. Consider recompiling 
+    # See: https://github.com/facebook/prophet/issues/775
+    pip install fbprophet==0.3.post2 && \
     pip install holoviews && \
     pip install geoviews && \
     pip install hypertools && \
@@ -304,7 +303,7 @@ RUN pip install fancyimpute && \
     pip install nibabel && \
     pip install mlens && \
     pip install scikit-multilearn && \
-    pip install -e git+http://github.com/tensorflow/cleverhans.git#egg=cleverhans && \
+    pip install cleverhans && \
     pip install leven && \
     pip install catboost && \
     #cd /usr/local/src && git clone --depth=1 https://github.com/AxeldeRomblay/MLBox && cd MLBox/python-package && python setup.py install && \
@@ -313,7 +312,8 @@ RUN pip install fancyimpute && \
     pip install paramnb && \
     pip install folium && \
     pip install scikit-plot && \
-    pip install dipy && \
+    # 0.15.0 is still unstable.
+    pip install dipy==0.14.0 && \
     # plotnine 0.5 is depending on matplotlib >= 3.0 which is not compatible with basemap.
     # once basemap support matplotlib, we can unpin this package.
     pip install plotnine==0.4.0 && \
@@ -324,7 +324,8 @@ RUN pip install fancyimpute && \
     pip install geoplot && \
     pip install eli5 && \
     pip install implicit && \
-    pip install dask-ml[xgboost]
+    pip install dask-ml[xgboost] && \
+    /tmp/clean-layer.sh
 
 RUN pip install kmeans-smote --no-dependencies && \
     # Add google PAIR-code Facets
@@ -343,7 +344,8 @@ RUN pip install kmeans-smote --no-dependencies && \
     pip install cufflinks && \
     pip install glmnet_py && \
     pip install lime && \
-    pip install memory_profiler
+    pip install memory_profiler && \
+    /tmp/clean-layer.sh
 
 # install cython & cysignals before pyfasttext
 RUN pip install --upgrade cython && \
@@ -374,9 +376,8 @@ RUN pip install --upgrade cython && \
     pip install mlcrate && \
     # Required to display Altair charts in Jupyter notebook
     pip install vega3 && \
-    jupyter nbextension install --sys-prefix --py vega3  && \
-    # clean up pip cache
-    rm -rf /root/.cache/pip/*
+    jupyter nbextension install --sys-prefix --py vega3 && \
+    /tmp/clean-layer.sh
 
 # Fast.ai and dependencies
 RUN pip install bcolz && \
@@ -434,13 +435,9 @@ RUN pip install bcolz && \
     # https://github.com/pandas-dev/pandas/issues/23053
     pip install pyarrow==0.10.0 && \
     pip install feather-format && \
-    # Don't install dependencies for fastai because it requires pytorch<0.4.
-    # which downgrades pytorch. fastai does work with pytorch 0.4.
-    pip install fastai==0.7.0 --no-deps && \
+    pip install fastai && \
     pip install torchtext && \
-    # clean up pip cache
-    rm -rf /root/.cache/pip/* && \
-    cd && rm -rf /usr/local/src/*
+    /tmp/clean-layer.sh
 
     ###########
     #
@@ -475,12 +472,16 @@ RUN pip install flashtext && \
     pip install PDPbox && \
     pip install ggplot && \
     pip install cesium && \
-    ##### ^^^^ Add new contributions above here ^^^^ #####
-    # clean up pip cache
-    rm -rf /root/.cache/pip/*
+    pip install rgf_python && \
+    /tmp/clean-layer.sh
 
 # Pin Vowpal Wabbit v8.6.0 because 8.6.1 does not build or install successfully
-RUN cd /usr/local/src && git clone -b 8.6.0 https://github.com/JohnLangford/vowpal_wabbit.git && ./vowpal_wabbit/python/conda_install.sh
+RUN cd /usr/local/src && \
+    git clone -b 8.6.0 https://github.com/JohnLangford/vowpal_wabbit.git && \
+    ./vowpal_wabbit/python/conda_install.sh && \
+    # Reinstall in non-editable mode (without the -e flag)
+    pip install vowpal_wabbit/python && \
+    /tmp/clean-layer.sh
 
 # For Facets
 ENV PYTHONPATH=$PYTHONPATH:/opt/facets/facets_overview/python/
@@ -496,7 +497,8 @@ RUN pip install --upgrade dask && \
     # Stop Matplotlib printing junk to the console on first load
     sed -i "s/^.*Matplotlib is building the font cache using fc-list.*$/# Warning removed by Kaggle/g" /opt/conda/lib/python3.6/site-packages/matplotlib/font_manager.py && \
     # Make matplotlib output in Jupyter notebooks display correctly
-    mkdir -p /etc/ipython/ && echo "c = get_config(); c.IPKernelApp.matplotlib = 'inline'" > /etc/ipython/ipython_config.py
+    mkdir -p /etc/ipython/ && echo "c = get_config(); c.IPKernelApp.matplotlib = 'inline'" > /etc/ipython/ipython_config.py && \
+    /tmp/clean-layer.sh
 
 # Add BigQuery client proxy settings
 ENV PYTHONUSERBASE "/root/.local"
