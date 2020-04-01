@@ -1,20 +1,53 @@
 import os
 
-# Monkey patches BigQuery client creation to use proxy.
-kaggle_proxy_token = os.getenv("KAGGLE_DATA_PROXY_TOKEN")
-if kaggle_proxy_token:
-    from google.auth import credentials
-    from google.cloud import bigquery
-    from google.cloud.bigquery._http import Connection
+from log import Log
 
-    Connection.API_BASE_URL = os.getenv("KAGGLE_DATA_PROXY_URL")
-    Connection._EXTRA_HEADERS["X-KAGGLE-PROXY-DATA"] = kaggle_proxy_token
+import sys
+import importlib
+import importlib.machinery
 
-    bq_client = bigquery.Client
-    bigquery.Client = lambda *args, **kwargs: bq_client(
-        *args,
-        credentials=credentials.AnonymousCredentials(),
-        project=os.getenv("KAGGLE_DATA_PROXY_PROJECT"),
-        **kwargs)
+class GcpModuleFinder(importlib.abc.MetaPathFinder):
+    _MODULES = ['google.cloud.bigquery', 'google.cloud.storage', 'google.cloud.automl_v1beta1']
+    _KAGGLE_GCP_PATH = 'kaggle_gcp.py'
+    def __init__(self):
+        pass
 
-    credentials.AnonymousCredentials.refresh = lambda *args: None
+    def _is_called_from_kaggle_gcp(self):
+        import inspect
+        for frame in inspect.stack():
+            if os.path.basename(frame.filename) == self._KAGGLE_GCP_PATH:
+                return True
+        return False
+
+    def find_spec(self, fullname, path, target=None):
+        if fullname in self._MODULES:
+            # If being called from kaggle_gcp, don't return our
+            # monkeypatched module to avoid circular dependency,
+            # since we call kaggle_gcp to load the module.
+            if self._is_called_from_kaggle_gcp():
+                return None
+            return importlib.machinery.ModuleSpec(fullname, GcpModuleLoader())
+
+
+class GcpModuleLoader(importlib.abc.Loader):
+    def __init__(self):
+        pass
+
+    def create_module(self, spec):
+        """Create the gcp module from the spec.
+        """
+        import kaggle_gcp
+        _LOADERS = {
+            'google.cloud.bigquery': kaggle_gcp.init_bigquery,
+            'google.cloud.storage': kaggle_gcp.init_gcs,
+            'google.cloud.automl_v1beta1': kaggle_gcp.init_automl,
+        }
+        monkeypatch_gcp_module = _LOADERS[spec.name]()
+        return monkeypatch_gcp_module
+
+    def exec_module(self, module):
+        pass
+
+
+if not hasattr(sys, 'frozen'):
+    sys.meta_path.insert(0, GcpModuleFinder())

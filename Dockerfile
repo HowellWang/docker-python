@@ -1,8 +1,10 @@
-FROM gcr.io/kaggle-images/python-tensorflow-whl:1.12.0-py36 as tensorflow_whl
-FROM continuumio/anaconda3:5.2.0
+ARG BASE_TAG=2019.03
+ARG TENSORFLOW_VERSION=2.1.0
+
+FROM gcr.io/kaggle-images/python-tensorflow-whl:${TENSORFLOW_VERSION}-py36-2 as tensorflow_whl
+FROM continuumio/anaconda3:${BASE_TAG}
 
 ADD clean-layer.sh  /tmp/clean-layer.sh
-ADD patches/ /tmp/patches/
 ADD patches/nbconvert-extensions.tpl /opt/kaggle/nbconvert-extensions.tpl
 
 # This is necessary for apt to access HTTPS sources
@@ -13,40 +15,35 @@ RUN apt-get update && \
     # Use a fixed apt-get repo to stop intermittent failures due to flaky httpredir connections,
     # as described by Lionel Chan at http://stackoverflow.com/a/37426929/5881346
 RUN sed -i "s/httpredir.debian.org/debian.uchicago.edu/" /etc/apt/sources.list && \
-    apt-get update && apt-get install -y build-essential unzip && \
-    # https://stackoverflow.com/a/46498173
-    conda update -y conda && conda update -y python && \
+    apt-get update && apt-get install -y build-essential unzip cmake && \
+    # Work to upgrade to Python 3.7 can be found on this branch: https://github.com/Kaggle/docker-python/blob/upgrade-py37/Dockerfile
+    conda install -y python=3.6.6 && \
     pip install --upgrade pip && \
-    apt-get -y install cmake && \
     /tmp/clean-layer.sh
 
-# Tensorflow doesn't support python 3.7 yet. See https://github.com/tensorflow/tensorflow/issues/20517
-# Fix to install tf 1.10:: Downgrade python 3.7->3.6.6 and downgrade Pandas 0.23.3->0.23.2
-RUN conda install -y python=3.6.6 && \
-    pip install pandas==0.23.2 && \
-    # Another fix for TF 1.10 https://github.com/tensorflow/tensorflow/issues/21518
-    pip install keras_applications==1.0.4 --no-deps && \
-    pip install keras_preprocessing==1.0.2 --no-deps && \
+# Make sure the dynamic linker finds the right libstdc++
+ENV LD_LIBRARY_PATH=/opt/conda/lib
+# b/128333086: Set PROJ_LIB to points to the proj4 cartographic library.
+ENV PROJ_LIB=/opt/conda/share/proj
+
+# Install conda packages not available on pip.
+# When using pip in a conda environment, conda commands should be ran first and then
+# the remaining pip commands: https://www.anaconda.com/using-pip-in-a-conda-environment/
+RUN conda install -c conda-forge matplotlib basemap cartopy python-igraph && \
+    conda install -c h2oai h2o && \
+    conda install -c pytorch pytorch torchvision torchaudio cpuonly && \
+    conda install -c conda-forge/label/cf202003 imagemagick && \
+    conda install -c anaconda pysal && \
     /tmp/clean-layer.sh
 
 # The anaconda base image includes outdated versions of these packages. Update them to include the latest version.
-RUN pip install --upgrade seaborn python-dateutil dask && \
+# b/150498764 distributed 2.11.0 fails at import while trying to reach out to 8.8.8.8 since the network is disabled in our hermetic tests.
+RUN pip install distributed==2.10.0 && \
+    # b/145358669 remove --upgrade once we upgrade base image which will include numpy >= 1.17
+    pip install --upgrade numpy && \
+    pip install seaborn python-dateutil dask && \
     pip install pyyaml joblib pytagcloud husl geopy ml_metrics mne pyshp && \
-    conda install -y -c conda-forge spacy && python -m spacy download en && \
-    python -m spacy download en_core_web_lg && \
-    # The apt-get version of imagemagick is out of date and has compatibility issues, so we build from source
-    apt-get -y install dbus fontconfig fontconfig-config fonts-dejavu-core fonts-droid-fallback ghostscript gsfonts hicolor-icon-theme \
-    libavahi-client3 libavahi-common-data libavahi-common3 libcairo2 libcap-ng0 libcroco3 \
-    libcups2 libcupsfilters1 libcupsimage2 libdatrie1 libdbus-1-3 libdjvulibre-text libdjvulibre21 libfftw3-double3 libfontconfig1 \
-    libfreetype6 libgdk-pixbuf2.0-0 libgdk-pixbuf2.0-common libgomp1 libgraphite2-3 libgs9 libgs9-common libharfbuzz0b libijs-0.35 \
-    libilmbase12 libjbig0 libjbig2dec0 libjpeg62-turbo liblcms2-2 liblqr-1-0 libltdl7 libmagickcore-6.q16-3 \
-    libmagickcore-6.q16-3-extra libmagickwand-6.q16-3 libnetpbm10 libopenexr22 libpango-1.0-0 libpangocairo-1.0-0 libpangoft2-1.0-0 \
-    libpaper-utils libpaper1 libpixman-1-0 libpng16-16 librsvg2-2 librsvg2-common libthai-data libthai0 libtiff5 libwmf0.2-7 \
-    libxcb-render0 libxcb-shm0 netpbm poppler-data p7zip-full && \
-    cd /usr/local/src && \
-    wget --no-verbose https://imagemagick.org/download/ImageMagick.tar.gz && \
-    tar xzf ImageMagick.tar.gz && cd `ls -d ImageMagick-*` && pwd && ls -al && ./configure && \
-    make -j $(nproc) && make install && \
+    pip install pandas && \
     /tmp/clean-layer.sh
 
 # Install tensorflow from a pre-built wheel
@@ -60,39 +57,21 @@ RUN apt-get install -y libfreetype6-dev && \
     pip install gensim && \
     pip install textblob && \
     pip install wordcloud && \
-    conda install -y -c conda-forge python-igraph && \
     pip install xgboost && \
-    pip install lightgbm && \
+    # Pinned to match GPU version. Update version together.
+    pip install lightgbm==2.3.1 && \
     pip install git+git://github.com/Lasagne/Lasagne.git && \
-    #keras
-    cd /usr/local/src && mkdir keras && cd keras && \
-    git clone --depth 1 https://github.com/fchollet/keras.git && \
-    cd keras && python setup.py install && \
-    #keras-rl
-    cd /usr/local/src && mkdir keras-rl && cd keras-rl && \
-    git clone --depth 1 https://github.com/matthiasplappert/keras-rl.git && \
-    cd keras-rl && python setup.py install && \
-    #keras-rcnn
-    pip install git+https://github.com/broadinstitute/keras-rcnn && \
+    pip install keras && \
+    pip install flake8 && \
     #neon
     cd /usr/local/src && \
     git clone --depth 1 https://github.com/NervanaSystems/neon.git && \
     cd neon && pip install . && \
     #nolearn
-    cd /usr/local/src && mkdir nolearn && cd nolearn && \
-    git clone --depth 1 https://github.com/dnouri/nolearn.git && cd nolearn && \
-    echo "x" > README.rst && echo "x" > CHANGES.rst && \
-    python setup.py install && \
-    # Dev branch of Theano
-    pip install git+git://github.com/Theano/Theano.git --upgrade --no-deps && \
-    # put theano compiledir inside /tmp (it needs to be in writable dir)
-    printf "[global]\nbase_compiledir = /tmp/.theano\n" > /.theanorc && \
-    cd /usr/local/src &&  git clone --depth 1 https://github.com/pybrain/pybrain && \
-    cd pybrain && python setup.py install && \
-    # Base ATLAS
-    apt-get install -y libatlas-base-dev && \
-    cd /usr/local/src && git clone --depth 1 https://github.com/ztane/python-Levenshtein && \
-    cd python-Levenshtein && python setup.py install && \
+    pip install nolearn && \
+    pip install Theano && \
+    pip install pybrain && \
+    pip install python-Levenshtein && \
     pip install hep_ml && \
     # chainer
     pip install chainer && \
@@ -100,7 +79,8 @@ RUN apt-get install -y libfreetype6-dev && \
     mkdir -p /usr/share/nltk_data && \
     # NLTK Downloader no longer continues smoothly after an error, so we explicitly list
     # the corpuses that work
-    python -m nltk.downloader -d /usr/share/nltk_data abc alpino averaged_perceptron_tagger \
+    # "yes | ..." answers yes to the retry prompt in case of an error. See b/133762095.
+    yes | python -m nltk.downloader -d /usr/share/nltk_data abc alpino averaged_perceptron_tagger \
     basque_grammars biocreative_ppi bllip_wsj_no_aux \
     book_grammars brown brown_tei cess_cat cess_esp chat80 city_database cmudict \
     comtrans conll2000 conll2002 conll2007 crubadan dependency_treebank \
@@ -116,66 +96,25 @@ RUN apt-get install -y libfreetype6-dev && \
     vader_lexicon verbnet webtext word2vec_sample wordnet wordnet_ic words ycoe && \
     # Stop-words
     pip install stop-words && \
+    # remove --upgrade once base image is upgraded and include scikit-image >= 0.16.2
+    pip install --upgrade scikit-image && \
     /tmp/clean-layer.sh
 
-# Make sure the dynamic linker finds the right libstdc++
-ENV LD_LIBRARY_PATH=/opt/conda/lib
-
-RUN apt-get -y install zlib1g-dev liblcms2-dev libwebp-dev libgeos-dev && \
-    pip install matplotlib==2.2.3 && \
-    pip install pyshp && \
-    pip install pyproj && \
-    cd /usr/local/src && git clone https://github.com/matplotlib/basemap.git && \
-    cd basemap && \
-    git checkout v1.1.0 && \
-    python setup.py install && \
-    pip install basemap --no-binary basemap && \
-    # sasl is apparently an ibis dependency
-    apt-get -y install libsasl2-dev && \
-    # ...as is psycopg2
-    apt-get install -y libpq-dev && \
-    pip install ibis-framework && \
-    # Cartopy plus dependencies
-    yes | conda install proj4 && \
-    pip install packaging && \
-    pip install shapely && \
-    pip install cartopy && \
-    # MXNet
+RUN pip install ibis-framework && \
     pip install mxnet && \
-    # h2o (requires java)
-    # Upgrade numpy with pip to avoid install errors
-    pip install --upgrade numpy && \
-    # requires java
-    apt-get install -y default-jdk && \
-    cd /usr/local/src && mkdir h2o && cd h2o && \
-    wget --no-verbose http://h2o-release.s3.amazonaws.com/h2o/latest_stable -O latest && \
-    wget --no-verbose --no-check-certificate -i latest -O h2o.zip && rm latest && \
-    unzip h2o.zip && rm h2o.zip && cp h2o-*/h2o.jar . && \
-    pip install `find . -name "*whl"` && \
-    # Keras setup
-    # Keras likes to add a config file in a custom directory when it's
-    # first imported. This doesn't work with our read-only filesystem, so we
-    # have it done now
-    python -c "from keras.models import Sequential"  && \
-    # Switch to TF backend
-    sed -i 's/theano/tensorflow/' /root/.keras/keras.json  && \
-    # Re-run it to flush any more disk writes
-    python -c "from keras.models import Sequential; from keras import backend; print(backend._BACKEND)" && \
-    # Keras reverts to /tmp from ~ when it detects a read-only file system
-    mkdir -p /tmp/.keras && cp /root/.keras/keras.json /tmp/.keras && \
+    pip install gluonnlp && \
+    pip install gluoncv && \    
     /tmp/clean-layer.sh
 
-    # scikit-learn dependencies
+# scikit-learn dependencies
 RUN pip install scipy && \
     pip install scikit-learn && \
     # HDF5 support
-    conda install h5py && \
+    pip install h5py && \
     pip install biopython && \
     # PUDB, for local debugging convenience
     pip install pudb && \
-    # Imbalanced-learn
-    cd /usr/local/src && git clone https://github.com/scikit-learn-contrib/imbalanced-learn.git && \
-    cd imbalanced-learn && python setup.py install && \
+    pip install imbalanced-learn && \
     # Convex Optimization library
     # Latest version fails to install, see https://github.com/cvxopt/cvxopt/issues/77
     #    and https://github.com/cvxopt/cvxopt/issues/80
@@ -184,27 +123,16 @@ RUN pip install scipy && \
     pip install line_profiler && \
     pip install orderedmultidict && \
     pip install smhasher && \
-    conda install -y -c bokeh bokeh && \
+    pip install bokeh && \
+    pip install numba && \
     pip install datashader && \
     # Boruta (python implementation)
-    cd /usr/local/src && git clone https://github.com/danielhomola/boruta_py.git && \
-    cd boruta_py && python setup.py install && \
-    cd /usr/local/src && git clone git://github.com/nicolashennetier/pyeconometrics.git && \
-    cd pyeconometrics && python setup.py install && \
+    pip install Boruta && \
     apt-get install -y graphviz && pip install graphviz && \
     # Pandoc is a dependency of deap
     apt-get install -y pandoc && \
-    cd /usr/local/src && git clone git://github.com/scikit-learn-contrib/py-earth.git && \
-    cd py-earth && python setup.py install && \
+    pip install git+git://github.com/scikit-learn-contrib/py-earth.git@issue191 && \
     pip install essentia && \
-    # PyTorch
-    export CXXFLAGS="-std=c++11" && \
-    export CFLAGS="-std=c99" && \
-    conda install -y pytorch-cpu torchvision-cpu -c pytorch && \
-    # PyTorch Audio
-    apt-get install -y sox libsox-dev libsox-fmt-all && \
-    pip install cffi && \
-    cd /usr/local/src && git clone https://github.com/pytorch/audio && cd audio && python setup.py install && \
     /tmp/clean-layer.sh
 
 # vtk with dependencies
@@ -215,7 +143,7 @@ RUN apt-get install -y libgl1-mesa-glx && \
     pip install xvfbwrapper && \
     /tmp/clean-layer.sh
 
-RUN pip install --upgrade mpld3 && \
+RUN pip install mpld3 && \
     pip install mplleaflet && \
     pip install gpxpy && \
     pip install arrow && \
@@ -223,7 +151,6 @@ RUN pip install --upgrade mpld3 && \
     pip install nibabel && \
     pip install pronouncing && \
     pip install markovify && \
-    pip install rf_perm_feat_import && \
     pip install imgaug && \
     pip install preprocessing && \
     pip install Baker && \
@@ -238,17 +165,13 @@ RUN pip install --upgrade mpld3 && \
     pip install toolz cytoolz && \
     pip install sacred && \
     pip install plotly && \
-    pip install git+https://github.com/nicta/dora.git && \
-    pip install git+https://github.com/hyperopt/hyperopt.git && \
-    # tflean. Deep learning library featuring a higher-level API for TensorFlow. http://tflearn.org
-    pip install git+https://github.com/tflearn/tflearn.git && \
+    pip install hyperopt && \
     pip install fitter && \
     pip install langid && \
     # Delorean. Useful for dealing with datetime
     pip install delorean && \
     pip install trueskill && \
     pip install heamy && \
-    pip install vida && \
     # Useful data exploration libraries (for missing data and generating reports)
     pip install missingno && \
     pip install pandas-profiling && \
@@ -256,26 +179,19 @@ RUN pip install --upgrade mpld3 && \
     pip install git+https://github.com/fmfn/BayesianOptimization.git && \
     pip install matplotlib-venn && \
     pip install pyldavis && \
-    # Pattern not yet Py3 compatible...
-    # pip install pattern && \
-    pip install git+git://github.com/rasbt/mlxtend.git#egg=mlxtend && \
+    pip install mlxtend && \
     pip install altair && \
     pip install pystan && \
     pip install ImageHash && \
-    conda install -y ecos && \
-    conda install -y CVXcanon && \
-    /tmp/clean-layer.sh
-
-RUN pip install fancyimpute && \
-    pip install git+https://github.com/pymc-devs/pymc3 && \
+    pip install ecos && \
+    pip install CVXcanon && \
+    pip install fancyimpute && \
+    pip install pymc3 && \
     pip install tifffile && \
     pip install spectral && \
     pip install descartes && \
     pip install geojson && \
-    pip install pysal && \
-    pip install pyflux && \
     pip install terminalplot && \
-    pip install raccoon && \
     pip install pydicom && \
     pip install wavio && \
     pip install SimpleITK && \
@@ -289,17 +205,15 @@ RUN pip install fancyimpute && \
     pip install pyexcel-ods && \
     pip install sklearn-pandas && \
     pip install stemming && \
-    # Latest version of fbprophet fails with incompatibility with PyStan. From the logs:
-    # pystan:Something went wrong while unpickling the StanModel. Consider recompiling 
-    # See: https://github.com/facebook/prophet/issues/775
-    pip install fbprophet==0.3.post2 && \
+    # b/148383434 remove pip install for holidays once fbprophet is compatible with latest version of holidays.
+    pip install holidays==0.9.12 && \
+    pip install fbprophet && \
     pip install holoviews && \
-    pip install geoviews && \
+    # 1.6.2 is not currently supported by the version of matplotlib we are using.
+    # See other comments about why matplotlib is pinned.
+    pip install geoviews==1.6.1 && \
     pip install hypertools && \
-    # Nxviz has been causing an installation issue by trying unsuccessfully to remove setuptools.
-    #pip install nxviz && \
     pip install py_stringsimjoin && \
-    pip install speedml && \
     pip install nibabel && \
     pip install mlens && \
     pip install scikit-multilearn && \
@@ -309,18 +223,15 @@ RUN pip install fancyimpute && \
     #cd /usr/local/src && git clone --depth=1 https://github.com/AxeldeRomblay/MLBox && cd MLBox/python-package && python setup.py install && \
     pip install fastFM && \
     pip install lightfm && \
-    pip install paramnb && \
     pip install folium && \
     pip install scikit-plot && \
-    # 0.15.0 is still unstable.
-    pip install dipy==0.14.0 && \
+    # dipy requires the optional fury dependency for visualizations.
+    pip install fury dipy && \
     # plotnine 0.5 is depending on matplotlib >= 3.0 which is not compatible with basemap.
     # once basemap support matplotlib, we can unpin this package.
     pip install plotnine==0.4.0 && \
-    pip install git+https://github.com/dvaida/hallucinate.git && \
     pip install scikit-surprise && \
     pip install pymongo && \
-    pip install edward && \
     pip install geoplot && \
     pip install eli5 && \
     pip install implicit && \
@@ -331,7 +242,6 @@ RUN pip install kmeans-smote --no-dependencies && \
     # Add google PAIR-code Facets
     cd /opt/ && git clone https://github.com/PAIR-code/facets && cd facets/ && jupyter nbextension install facets-dist/ --user && \
     export PYTHONPATH=$PYTHONPATH:/opt/facets/facets_overview/python/ && \
-    pip install --no-dependencies ethnicolr && \
     pip install tensorpack && \
     pip install pycountry && pip install iso3166 && \
     pip install pydash && \
@@ -342,7 +252,6 @@ RUN pip install kmeans-smote --no-dependencies && \
     pip install fbpca && \
     pip install sentencepiece && \
     pip install cufflinks && \
-    pip install glmnet_py && \
     pip install lime && \
     pip install memory_profiler && \
     /tmp/clean-layer.sh
@@ -351,17 +260,25 @@ RUN pip install kmeans-smote --no-dependencies && \
 RUN pip install --upgrade cython && \
     pip install --upgrade cysignals && \
     pip install pyfasttext && \
-    pip install ktext && \
-    pip install git+git://github.com/facebookresearch/fastText.git && \
+    # ktext has an explicit dependency on Keras 2.2.4 which is not
+    # compatible with TensorFlow 2.0 (support was added in Keras 2.3.0).
+    # Add the package back once it is fixed upstream.
+    # pip install ktext && \
+    pip install fasttext && \
     apt-get install -y libhunspell-dev && pip install hunspell && \
     pip install annoy && \
-    pip install category_encoders && \
-    pip install google-cloud-bigquery && \
+    # Need to use CountEncoder from category_encoders before it's officially released
+    pip install git+https://github.com/scikit-learn-contrib/categorical-encoding.git && \
+    pip install google-cloud-automl && \
+    # Newer version crashes (latest = 1.14.0) when running tensorflow.
+    # python -c "from google.cloud import bigquery; import tensorflow". This flow is common because bigquery is imported in kaggle_gcp.py
+    # which is loaded at startup.
+    pip install google-cloud-bigquery==1.12.1 && \
+    pip install google-cloud-storage && \
     pip install ortools && \
     pip install scattertext && \
     # Pandas data reader
     pip install pandas-datareader && \
-    pip install pykoko && \
     pip install wordsegment && \
     pip install pyahocorasick && \
     pip install wordbatch && \
@@ -374,12 +291,8 @@ RUN pip install --upgrade cython && \
     # yellowbrick machine learning visualization library
     pip install yellowbrick && \
     pip install mlcrate && \
-    # Required to display Altair charts in Jupyter notebook
-    pip install vega3 && \
-    jupyter nbextension install --sys-prefix --py vega3 && \
     /tmp/clean-layer.sh
 
-# Fast.ai and dependencies
 RUN pip install bcolz && \
     pip install bleach && \
     pip install certifi && \
@@ -387,7 +300,8 @@ RUN pip install bcolz && \
     pip install decorator && \
     pip install entrypoints && \
     pip install html5lib && \
-    pip install ipykernel && \
+    # Latest version breaks nbconvert: https://github.com/ipython/ipykernel/issues/422
+    pip install ipykernel==5.1.1 && \
     pip install ipython && \
     pip install ipython-genutils && \
     pip install ipywidgets && \
@@ -404,39 +318,41 @@ RUN pip install bcolz && \
     pip install nbconvert && \
     pip install nbformat && \
     pip install notebook==5.5.0 && \
-    pip install numpy && \
     pip install olefile && \
     pip install opencv-python && \
-    pip install --upgrade pandas && \
     pip install pandas_summary && \
     pip install pandocfilters && \
     pip install pexpect && \
     pip install pickleshare && \
     pip install Pillow && \
+    # Install openslide and its python binding
+    apt-get install -y openslide-tools && \
+    # b/152402322 install latest from pip once is in: https://github.com/openslide/openslide-python/pull/76
+    pip install git+git://github.com/rosbo/openslide-python.git@fix-setup && \
     pip install ptyprocess && \
     pip install Pygments && \
     pip install pyparsing && \
-    pip install python-dateutil==2.6.0 && \
     pip install pytz && \
     pip install PyYAML && \
     pip install pyzmq && \
     pip install qtconsole && \
-    pip install simplegeneric && \
     pip install six && \
     pip install terminado && \
-    pip install testpath && \
-    pip install tornado && \
+    # Latest version (6.0) of tornado breaks Jupyter notebook:
+    # https://github.com/jupyter/notebook/issues/4439
+    pip install tornado==5.0.2 && \
     pip install tqdm && \
     pip install traitlets && \
     pip install wcwidth && \
     pip install webencodings && \
     pip install widgetsnbextension && \
-    # Latest version of pyarrow conflicts with pandas
-    # https://github.com/pandas-dev/pandas/issues/23053
-    pip install pyarrow==0.10.0 && \
+    pip install pyarrow && \
     pip install feather-format && \
     pip install fastai && \
     pip install torchtext && \
+    pip install allennlp && \
+    # b/149359379 remove once allennlp 1.0 is released which won't cause a spacy downgrade.
+    pip install spacy==2.2.3 && python -m spacy download en && python -m spacy download en_core_web_lg && \
     /tmp/clean-layer.sh
 
     ###########
@@ -448,6 +364,7 @@ RUN pip install bcolz && \
     ###########
 
 RUN pip install flashtext && \
+    pip install wandb && \
     pip install marisa-trie && \
     pip install pyemd && \
     pip install pyupset && \
@@ -456,7 +373,6 @@ RUN pip install flashtext && \
     pip install featuretools && \
     pip install -e git+https://github.com/SohierDane/BigQuery_Helper#egg=bq_helper && \
     pip install hpsklearn && \
-    pip install keras-tqdm && \
     pip install git+https://github.com/Kaggle/learntools && \
     pip install kmapper && \
     pip install shap && \
@@ -466,21 +382,56 @@ RUN pip install flashtext && \
     pip install pyarabic && \
     pip install conx && \
     pip install pandasql && \
-    pip install trackml && \
     pip install tensorflow_hub && \
     pip install jieba  && \
-    pip install PDPbox && \
+    pip install git+https://github.com/SauceCat/PDPbox && \
     pip install ggplot && \
     pip install cesium && \
     pip install rgf_python && \
+    # b/145404107: latest version force specific version of numpy and torch.
+    pip install pytext-nlp==0.1.2 && \
+    pip install tsfresh && \
+    pip install pymagnitude && \
+    pip install pykalman && \
+    pip install optuna && \
+    pip install chainercv && \
+    pip install chainer-chemistry && \
+    pip install plotly_express && \
+    pip install albumentations && \
+    pip install catalyst && \
+    # b/145133331: latest version is causing issue with gcloud.
+    pip install rtree==0.8.3 && \
+    # b/145133331 osmnx 0.11 requires rtree >= 0.9 which is causing issue with gcloud.
+    pip install osmnx==0.10 && \
+    apt-get -y install libspatialindex-dev && \
+    pip install pytorch-ignite && \
+    pip install qgrid && \
+    pip install bqplot && \
+    pip install earthengine-api && \
+    pip install transformers && \
+    pip install dlib && \
+    pip install kaggle-environments && \
+    # b/149905611 The geopandas tests are broken with the version 0.7.0
+    pip install geopandas==0.6.3 && \
+    pip install nnabla && \
     /tmp/clean-layer.sh
 
-# Pin Vowpal Wabbit v8.6.0 because 8.6.1 does not build or install successfully
-RUN cd /usr/local/src && \
-    git clone -b 8.6.0 https://github.com/JohnLangford/vowpal_wabbit.git && \
-    ./vowpal_wabbit/python/conda_install.sh && \
-    # Reinstall in non-editable mode (without the -e flag)
-    pip install vowpal_wabbit/python && \
+# Tesseract and some associated utility packages
+RUN apt-get install tesseract-ocr -y && \
+    pip install pytesseract && \
+    pip install wand==0.5.3 && \
+    pip install pdf2image && \
+    pip install PyPDF && \
+    pip install pyocr && \
+    /tmp/clean-layer.sh
+ENV TESSERACT_PATH=/usr/bin/tesseract
+
+# Install vowpalwabbit
+RUN apt-get install -y libboost-dev libboost-program-options-dev libboost-system-dev libboost-thread-dev libboost-math-dev libboost-test-dev zlib1g-dev cmake g++ && \
+    pip install six && \
+    apt-get install -y libboost-python-dev default-jdk && \
+    ln -s /usr/lib/x86_64-linux-gnu/libboost_python-py35.so /usr/lib/x86_64-linux-gnu/libboost_python3.so && \
+    pip install vowpalwabbit && \
     /tmp/clean-layer.sh
 
 # For Facets
@@ -500,9 +451,44 @@ RUN pip install --upgrade dask && \
     mkdir -p /etc/ipython/ && echo "c = get_config(); c.IPKernelApp.matplotlib = 'inline'" > /etc/ipython/ipython_config.py && \
     /tmp/clean-layer.sh
 
+# gcloud SDK https://cloud.google.com/sdk/docs/quickstart-debian-ubuntu
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" \
+    | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+    apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
+    apt-get update -y && apt-get install google-cloud-sdk -y && \
+    /tmp/clean-layer.sh
+
 # Add BigQuery client proxy settings
 ENV PYTHONUSERBASE "/root/.local"
+ADD patches/kaggle_gcp.py /root/.local/lib/python3.6/site-packages/kaggle_gcp.py
+ADD patches/kaggle_secrets.py /root/.local/lib/python3.6/site-packages/kaggle_secrets.py
+ADD patches/kaggle_web_client.py /root/.local/lib/python3.6/site-packages/kaggle_web_client.py
+ADD patches/kaggle_datasets.py /root/.local/lib/python3.6/site-packages/kaggle_datasets.py
+ADD patches/log.py /root/.local/lib/python3.6/site-packages/log.py
 ADD patches/sitecustomize.py /root/.local/lib/python3.6/site-packages/sitecustomize.py
+
+# TensorBoard Jupyter extension. Should be replaced with TensorBoard's provided magic once we have
+# worker tunneling support in place.
+# b/139212522 re-enable TensorBoard once solution for slowdown is implemented.
+# ENV JUPYTER_CONFIG_DIR "/root/.jupyter/"
+# RUN pip install jupyter_tensorboard && \
+#     jupyter serverextension enable jupyter_tensorboard && \
+#     jupyter tensorboard enable
+# ADD patches/tensorboard/notebook.py /opt/conda/lib/python3.6/site-packages/tensorboard/notebook.py
 
 # Set backend for matplotlib
 ENV MPLBACKEND "agg"
+
+# We need to redefine TENSORFLOW_VERSION here to get the default ARG value defined above the FROM instruction.
+# See: https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
+ARG TENSORFLOW_VERSION
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+LABEL git-commit=$GIT_COMMIT
+LABEL build-date=$BUILD_DATE
+LABEL tensorflow-version=$TENSORFLOW_VERSION
+
+# Correlate current release with the git hash inside the kernel editor by running `!cat /etc/git_commit`.
+RUN echo "$GIT_COMMIT" > /etc/git_commit && echo "$BUILD_DATE" > /etc/build_date

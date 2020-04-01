@@ -1,6 +1,8 @@
+# docker-python
+
 [Kaggle Kernels](https://www.kaggle.com/kernels) allow users to run a Python Notebook in the cloud against our competitions and datasets without having to download data or set up their environment.
 
-This repository includes our Dockerfiles for building the [CPU-only](Dockerfile) and [GPU](gpu.Dockerfile) image that runs Python Kernels on Kaggle. 
+This repository includes our Dockerfiles for building the [CPU-only](Dockerfile) and [GPU](gpu.Dockerfile) image that runs Python Kernels on Kaggle.
 
 Our Python Docker images are stored on Google Container Registry at:
 
@@ -15,7 +17,7 @@ To get started with this image, read our [guide](http://blog.kaggle.com/2016/02/
 
 ## Requesting new packages
 
-First, evaluate whether installing the package yourself in your own Kernels suits your needs. See [guide](wiki/Missing-Packages).
+First, evaluate whether installing the package yourself in your own Kernels suits your needs. See [guide](https://github.com/Kaggle/docker-python/wiki/Missing-Packages).
 
 If you the first step above doesn't work for your use case, [open an issue](https://github.com/Kaggle/docker-python/issues/new) or a [pull request](https://github.com/Kaggle/docker-python/pulls).
 
@@ -85,4 +87,4 @@ Building Tensorflow from sources:
 * Increase performance: When building from sources, we can leverage CPU specific optimizations
 * Is required: Tensorflow with GPU support must be built from sources
 
-The [Dockerfile](tensorflow-whl/Dockerfile) and the [instructions](tensorflow-whl/README.md) can be found in the [tensorflow-whl folder/](tensorflow/).
+The [Dockerfile](tensorflow-whl/Dockerfile) and the [instructions](tensorflow-whl/README.md) can be found in the [tensorflow-whl folder/](tensorflow-whl/).

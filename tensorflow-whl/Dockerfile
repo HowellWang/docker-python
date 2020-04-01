@@ -1,5 +1,5 @@
-FROM nvidia/cuda:9.2-cudnn7-devel-ubuntu16.04 AS nvidia
-FROM continuumio/anaconda3:5.2.0
+FROM nvidia/cuda:10.1-cudnn7-devel-ubuntu16.04 AS nvidia
+FROM continuumio/anaconda3:2019.03
 
 # Avoid interactive configuration prompts/dialogs during apt-get.
 ENV DEBIAN_FRONTEND=noninteractive
@@ -15,8 +15,11 @@ COPY --from=nvidia /etc/apt/trusted.gpg /etc/apt/trusted.gpg.d/cuda.gpg
 
 # Ensure the cuda libraries are compatible with the GPU image.
 # TODO(b/120050292): Use templating to keep in sync.
-ENV CUDA_VERSION=9.2.148
-ENV CUDA_PKG_VERSION=9-2=$CUDA_VERSION-1
+ENV CUDA_MAJOR_VERSION=10
+ENV CUDA_MINOR_VERSION=1
+ENV CUDA_PATCH_VERSION=243
+ENV CUDA_VERSION=$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION.$CUDA_PATCH_VERSION
+ENV CUDA_PKG_VERSION=$CUDA_MAJOR_VERSION-$CUDA_MINOR_VERSION=$CUDA_VERSION-1
 LABEL com.nvidia.volumes.needed="nvidia_driver"
 LABEL com.nvidia.cuda.version="${CUDA_VERSION}"
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
@@ -28,7 +31,7 @@ ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs"
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV NVIDIA_REQUIRE_CUDA="cuda>=9.0"
+ENV NVIDIA_REQUIRE_CUDA="cuda>=$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION"
 RUN apt-get update && apt-get install -y --no-install-recommends \
       cuda-cupti-$CUDA_PKG_VERSION \
       cuda-cudart-$CUDA_PKG_VERSION \
@@ -38,56 +41,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       cuda-nvml-dev-$CUDA_PKG_VERSION \
       cuda-minimal-build-$CUDA_PKG_VERSION \
       cuda-command-line-tools-$CUDA_PKG_VERSION \
-      libcudnn7=7.4.1.5-1+cuda9.2 \
-      libcudnn7-dev=7.4.1.5-1+cuda9.2 \
-      libnccl2=2.3.7-1+cuda9.2 \
-      libnccl-dev=2.3.7-1+cuda9.2 && \
-    ln -s /usr/local/cuda-9.2 /usr/local/cuda && \
-    ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 && \
-    rm -rf /var/lib/apt/lists/*
+      libcudnn7=7.6.5.32-1+cuda$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION \
+      libcudnn7-dev=7.6.5.32-1+cuda$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION \
+      libnccl2=2.5.6-1+cuda$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION \
+      libnccl-dev=2.5.6-1+cuda$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION && \
+    ln -s /usr/local/cuda-$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION /usr/local/cuda && \
+    ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
 
-# Install bazel
-# Tensorflow 1.11 requires the Bazel 0.15: https://www.tensorflow.org/install/source
-ENV BAZEL_VERSION=0.15.0
-RUN apt-get update && apt-get install -y gnupg zip && \
-    echo "deb http://ppa.launchpad.net/webupd8team/java/ubuntu precise main" | tee -a /etc/apt/sources.list && \
-    echo "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu precise main" | tee -a /etc/apt/sources.list && \
-    apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys --no-tty EEA14886 C857C906 2B90D010 && \
-    apt-get update && \
-    echo debconf shared/accepted-oracle-license-v1-1 select true | debconf-set-selections && \
-    echo debconf shared/accepted-oracle-license-v1-1 seen true | debconf-set-selections && \
-    apt-get install -y oracle-java8-installer && \
+# Work to upgrade to Python 3.7 can be found on this branch: https://github.com/Kaggle/docker-python/blob/upgrade-py37/Dockerfile
+RUN conda install -y python=3.6.6 && pip install --upgrade pip && pip install numpy
+
+# See _TF_(MIN|MAX)_BAZEL_VERSION at https://github.com/tensorflow/tensorflow/blob/master/configure.py.
+ENV BAZEL_VERSION=0.29.1
+RUN apt-get install -y gnupg zip openjdk-8-jdk && \
     apt-get install -y --no-install-recommends \
       bash-completion \
       zlib1g-dev && \
-    # Install Bazel with apt-get once this issue is resolved: https://github.com/bazelbuild/continuous-integration/issues/128
     wget --no-verbose "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel_${BAZEL_VERSION}-linux-x86_64.deb" && \
     dpkg -i bazel_*.deb && \
     rm bazel_*.deb
 
-# Tensorflow doesn't support python 3.7 yet. See https://github.com/tensorflow/tensorflow/issues/20517
-RUN conda install -y python=3.6.6 && \
-    # Another fix for TF 1.10 https://github.com/tensorflow/tensorflow/issues/21518
-    pip install keras_applications==1.0.4 --no-deps && \
-    pip install keras_preprocessing==1.0.2 --no-deps
-
-# Fetch tensorflow
+# Fetch tensorflow & install dependencies.
 RUN cd /usr/local/src && \
     git clone https://github.com/tensorflow/tensorflow && \
     cd tensorflow && \
-    git checkout r1.12
+    git checkout tags/v2.1.0 && \
+    pip install keras_applications --no-deps && \
+    pip install keras_preprocessing --no-deps
 
 # Create a tensorflow wheel for CPU
 RUN cd /usr/local/src/tensorflow && \
     cat /dev/null | ./configure && \
-    bazel build --config=opt //tensorflow/tools/pip_package:build_pip_package && \
+    bazel build --config=opt --config=v2 //tensorflow/tools/pip_package:build_pip_package && \
     bazel-bin/tensorflow/tools/pip_package/build_pip_package /tmp/tensorflow_cpu && \
     bazel clean
 
 # Create a tensorflow wheel for GPU/cuda
 ENV TF_NEED_CUDA=1
-ENV TF_CUDA_VERSION=9.2
-ENV TF_CUDA_COMPUTE_CAPABILITIES=3.7,6.0
+ENV TF_CUDA_VERSION=$CUDA_MAJOR_VERSION.$CUDA_MINOR_VERSION
+# 3.7 is for the K80 and 6.0 is for the P100, 7.5 is for the T4: https://developer.nvidia.com/cuda-gpus
+ENV TF_CUDA_COMPUTE_CAPABILITIES=3.7,6.0,7.5
 ENV TF_CUDNN_VERSION=7
 ENV TF_NCCL_VERSION=2
 ENV NCCL_INSTALL_PATH=/usr/
@@ -98,6 +91,7 @@ RUN cd /usr/local/src/tensorflow && \
     cat /dev/null | ./configure && \
     echo "/usr/local/cuda-${TF_CUDA_VERSION}/targets/x86_64-linux/lib/stubs" > /etc/ld.so.conf.d/cuda-stubs.conf && ldconfig && \
     bazel build --config=opt \
+                --config=v2 \
                 --config=cuda \
                 --cxxopt="-D_GLIBCXX_USE_CXX11_ABI=0" \
                 //tensorflow/tools/pip_package:build_pip_package && \
